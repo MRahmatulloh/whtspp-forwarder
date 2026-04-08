@@ -3,3 +3,4 @@ node_modules/
 .wwebjs_cache/
 message_logs/
 config.json
+.cache/

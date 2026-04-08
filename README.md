@@ -15,6 +15,7 @@ Bu skript `whatsapp-web.js` asosida yozilgan va Telegram skriptingizdagi oqimga 
 - Node.js `18+`
 - hostingda Chromium/Puppeteer ishlashi kerak
 - birinchi ishga tushirishda QR skan qilish kerak
+- agar serverda system Chrome bo'lmasa, `npx puppeteer browsers install chrome` bilan lokal browser yuklash kerak bo'lishi mumkin
 
 ## Ishga tushirish
 
@@ -36,6 +37,50 @@ npm run list-chats
 ```bash
 npm start
 ```
+
+## PM2 bilan ishlatish
+
+Bir martalik start:
+
+```bash
+pm2 start ecosystem.config.cjs
+```
+
+Holatini ko'rish:
+
+```bash
+pm2 status
+pm2 logs whtspp-forwarder
+```
+
+Config yoki kod o'zgarsa restart:
+
+```bash
+pm2 restart whtspp-forwarder
+```
+
+Server rebootdan keyin ham qayta turishi uchun:
+
+```bash
+pm2 save
+pm2 startup
+```
+
+## Shared Hosting Eslatma
+
+Ba'zi shared hostinglarda `google-chrome` yoki `chromium` PATH ichida bo'lmaydi. Bu holatda Puppeteer uchun browserni loyiha ichidagi cache'ga yuklab ko'ring:
+
+```bash
+npx puppeteer browsers install chrome
+```
+
+Agar yuklangan browserni tekshirmoqchi bo'lsangiz:
+
+```bash
+npx @puppeteer/browsers list
+```
+
+Loyiha ichida `.puppeteerrc.cjs` bor, shu sabab browser cache `.cache/puppeteer` ichiga tushadi.
 
 ## Konfiguratsiya
 
