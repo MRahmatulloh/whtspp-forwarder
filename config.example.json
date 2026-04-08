@@ -1,0 +1,25 @@
+{
+  "sessionName": "whtspp-forwarder",
+  "mode": "all",
+  "timezone": "Asia/Tashkent",
+  "authTimeoutMs": 120000,
+  "historyLimitPerChat": 100,
+  "maxMessageLength": 300,
+  "sourceChats": [
+    "120363012345678901@g.us",
+    "Mening Guruhim"
+  ],
+  "targetChat": "120363098765432101@g.us",
+  "includePattern": "бока|бука|bekob|bekab|begob|begab|бекоб|бекаб|бегоб|бегаб|бегов|бегав|begov|begav|zafar|зафар|ширин|shirin|wirin|hovos|xovos|ховос|dasht|дашт|yangiye|yangie|янгие|янгийе|boyo|boya|бойо|бойа|бая|боя|боё|баё|tris|trsat|трсат|трис",
+  "excludePattern": "ref|площа|трайл|bochkalarimiz|erkak|qoʻqon|qõqon|23 tonna|маргилон|ижевск|trishotka|учуй|boshantiraman|андижонга|fura|22 тонна|андижондан|chust|furra|андижондан|водийга|farg'ona|oltiariq|sfadli|литрига|сифатили|fargʻona|bogʻdod|наманган|afto‘koblt|кукон|23tonna|50 kuba|35тн|23 тонна|plawatka|tiraller|27tonna|25тн|andijon|fargona|samara|24 тонна|самара|namangan|qo'qon|qoqon|dalb|далб|30toʻnna|quqon|margilon|shafyorman|penza|maskiva|plash|muroj|plosh|zafarabod|камиссия|фаргона|лесосибирск|зафарабод|943333080|998882006300|.+998882006300|андижон конч|tannar|yungini|traller|траллер|юрамиз|silyosimiz|yuk kerak|shirinlar❤️|pr0fiIga👈🏻💋|qo'shishingiz|предлагайте|sfatli|25-50|almata|алмата|москва|АНДИЖОН - ТОШКЕНТ|zafarob|зафароб|20 ton|25 ton|30 ton|15 ton|10 ton|125 som|konchdan|140 som|jinsiy|жинсий|pilash|zafarobod|salom!|shakman|shacm|tranzit|термос|термослик|termos|termoslik|tugmani|pres|tanar|tonar|reklama|fera|traler|лабо хизмати|logistics|mowina topip|yukni olish|labo xizmati|yuk olamiz|labo kerak|kechirasiz|транзит|исталган|topamiz|24/7|ISHBORUZ|treyler|35 tonna|welcome|24.5tonna|17t|perech|автошиналар|perich|treler|chakm|chokm|cakm|fraxt|samosv|somosv|бэгах|shalanda|avans|paravoz|kamaz|tent|переч|перич|пирич|растаможка|тент|оплата|реф|фура|фурра|фрахт|кострома|кемерово|тралер|трейлер|трелер|омск|алмата|погрузка|пагрузка|плаш|плош|аванс|самосв|сомосв|қўшишингиз|паравоз|зафаробод|танар|тонар|чакм|чокм|cакм|бэгах|шаланда|камаз|прес|pris|прис|лобо|samon|somon|самон|сомон|пилаш",
+  "puppeteer": {
+    "headless": true,
+    "timeout": 120000,
+    "protocolTimeout": 300000,
+    "args": [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  }
+}
