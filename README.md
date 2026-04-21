@@ -19,7 +19,7 @@ Bu skript `whatsapp-web.js` asosida yozilgan va Telegram skriptingizdagi oqimga 
 
 ## Ishga tushirish
 
-1. `config.json` fayli kerak bo'ladi. Strukturasi uchun [config.example.json](/C:/OSPanel/home/whtspp/config.example.json) dan foydalaning.
+1. `config.json` fayli kerak bo'ladi. Strukturasi uchun [config.example.json](/C:/projects/whtspp-forwarder/config.example.json) dan foydalaning.
 2. Paketlarni o'rnating:
 
 ```bash
@@ -92,7 +92,12 @@ Loyiha ichida `.puppeteerrc.cjs` bor, shu sabab browser cache `.cache/puppeteer`
 - `includePattern`: `filtered` rejimida mos kelishi kerak bo'lgan regex.
 - `excludePattern`: `filtered` rejimida chiqarib tashlanadigan regex.
 - `historyLimitPerChat`: start paytida har bir chatdan nechta oxirgi xabar tekshirilishi.
+- `historyFetchRetries`: startdagi history olish yiqilsa necha marta qayta urinishi.
+- `historyFetchRetryDelayMs`: retry urinishlari orasidagi kutish vaqti.
 - `maxMessageLength`: bundan uzun matnlar o'tkazib yuboriladi.
+- `processingConcurrency`: live xabarlarni nechta parallel ishchi bilan qayta ishlash.
+- `logFlushIntervalMs`: dedupe loglari diskka necha ms ichida flush qilinishi.
+- `logFlushBatchSize`: flush bo'lishidan oldin nechta log yozuvi bufferda yig'ilishi.
 - `timezone`: kunlik log va sana filtri uchun timezone.
 - `authTimeoutMs`: WhatsApp auth/ready jarayoni uchun timeout.
 - `puppeteer.timeout`: browser launch timeout.

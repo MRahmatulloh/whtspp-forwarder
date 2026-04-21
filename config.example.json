@@ -4,7 +4,12 @@
   "timezone": "Asia/Tashkent",
   "authTimeoutMs": 120000,
   "historyLimitPerChat": 100,
+  "historyFetchRetries": 2,
+  "historyFetchRetryDelayMs": 1500,
   "maxMessageLength": 300,
+  "processingConcurrency": 2,
+  "logFlushIntervalMs": 250,
+  "logFlushBatchSize": 50,
   "sourceChats": [
     "120363012345678901@g.us",
     "Mening Guruhim"

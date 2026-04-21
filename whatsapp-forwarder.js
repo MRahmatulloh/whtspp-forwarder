@@ -18,7 +18,12 @@ const DEFAULT_CONFIG = {
   timezone: 'Asia/Tashkent',
   authTimeoutMs: 120000,
   historyLimitPerChat: 100,
+  historyFetchRetries: 2,
+  historyFetchRetryDelayMs: 1500,
   maxMessageLength: 300,
+  processingConcurrency: 2,
+  logFlushIntervalMs: 250,
+  logFlushBatchSize: 50,
   sourceChats: [],
   targetChat: '',
   includePattern: '',
@@ -39,7 +44,146 @@ const runtimeState = {
   forwardedIds: new Set(),
   forwardedHashes: new Set(),
   inFlightIds: new Set(),
+  forwardedIdsWriter: null,
+  hashesWriter: null,
 };
+
+const formatterCache = new Map();
+
+class BufferedLineWriter {
+  constructor(filePath, options = {}) {
+    this.filePath = filePath;
+    this.flushIntervalMs = options.flushIntervalMs ?? 250;
+    this.flushBatchSize = options.flushBatchSize ?? 50;
+    this.buffer = [];
+    this.flushTimer = null;
+    this.closed = false;
+    this.pendingFlush = Promise.resolve();
+    this.stream = fs.createWriteStream(filePath, {
+      flags: 'a',
+      encoding: 'utf8',
+    });
+  }
+
+  append(value) {
+    if (this.closed) {
+      return;
+    }
+
+    this.buffer.push(`${value}\n`);
+
+    if (this.buffer.length >= this.flushBatchSize) {
+      this.flush();
+      return;
+    }
+
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        this.flush();
+      }, this.flushIntervalMs);
+
+      if (typeof this.flushTimer.unref === 'function') {
+        this.flushTimer.unref();
+      }
+    }
+  }
+
+  flush() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    if (this.buffer.length === 0) {
+      return this.pendingFlush;
+    }
+
+    const chunk = this.buffer.join('');
+    this.buffer.length = 0;
+
+    this.pendingFlush = this.pendingFlush
+      .then(
+        () =>
+          new Promise((resolve, reject) => {
+            this.stream.write(chunk, 'utf8', (error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+
+              resolve();
+            });
+          })
+      )
+      .catch((error) => {
+        console.error(`[LOG] ${this.filePath} ga yozib bo'lmadi: ${error.message}`);
+      });
+
+    return this.pendingFlush;
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+    await this.flush();
+
+    await new Promise((resolve) => {
+      this.stream.end(resolve);
+    });
+  }
+}
+
+class TaskQueue {
+  constructor(concurrency) {
+    this.concurrency = Math.max(1, Number(concurrency) || 1);
+    this.activeCount = 0;
+    this.queue = [];
+    this.idleResolvers = [];
+  }
+
+  add(task) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ task, resolve, reject });
+      this.drain();
+    });
+  }
+
+  async onIdle() {
+    if (this.activeCount === 0 && this.queue.length === 0) {
+      return;
+    }
+
+    await new Promise((resolve) => {
+      this.idleResolvers.push(resolve);
+    });
+  }
+
+  drain() {
+    while (this.activeCount < this.concurrency && this.queue.length > 0) {
+      const item = this.queue.shift();
+      this.activeCount += 1;
+
+      Promise.resolve()
+        .then(item.task)
+        .then(item.resolve, item.reject)
+        .finally(() => {
+          this.activeCount -= 1;
+
+          if (this.activeCount === 0 && this.queue.length === 0) {
+            const resolvers = this.idleResolvers.splice(0);
+            for (const resolve of resolvers) {
+              resolve();
+            }
+          }
+
+          this.drain();
+        });
+    }
+  }
+}
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -67,6 +211,12 @@ function loadConfig() {
   };
 
   config.mode = String(config.mode || 'filtered').trim().toLowerCase();
+  config.sourceChats = normalizeChatSpecs(config.sourceChats);
+  config.historyFetchRetries = Math.max(0, Number(config.historyFetchRetries) || 0);
+  config.historyFetchRetryDelayMs = Math.max(250, Number(config.historyFetchRetryDelayMs) || 1500);
+  config.processingConcurrency = Math.max(1, Number(config.processingConcurrency) || 1);
+  config.logFlushIntervalMs = Math.max(50, Number(config.logFlushIntervalMs) || 250);
+  config.logFlushBatchSize = Math.max(1, Number(config.logFlushBatchSize) || 50);
 
   if (!LIST_CHATS_ONLY) {
     if (!Array.isArray(config.sourceChats) || config.sourceChats.length === 0) {
@@ -97,6 +247,27 @@ function ensureDirectory(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function normalizeChatSpecs(sourceChats) {
+  if (!Array.isArray(sourceChats)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const result = [];
+
+  for (const chat of sourceChats) {
+    const normalized = String(chat || '').trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
 function loadSet(filePath) {
   if (!fs.existsSync(filePath)) {
     return new Set();
@@ -111,20 +282,8 @@ function loadSet(filePath) {
   return new Set(lines);
 }
 
-function appendLine(filePath, value) {
-  fs.appendFileSync(filePath, `${value}\n`, 'utf8');
-}
-
 function formatDateParts(date, timezone) {
-  const formatter = new Intl.DateTimeFormat('en-GB', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  const formatter = getFormatter(timezone);
 
   const parts = Object.fromEntries(
     formatter.formatToParts(date).map((part) => [part.type, part.value])
@@ -137,6 +296,26 @@ function formatDateParts(date, timezone) {
     hour: parts.hour,
     minute: parts.minute,
   };
+}
+
+function getFormatter(timezone) {
+  let formatter = formatterCache.get(timezone);
+  if (formatter) {
+    return formatter;
+  }
+
+  formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  formatterCache.set(timezone, formatter);
+  return formatter;
 }
 
 function getTodayKey(timezone) {
@@ -162,12 +341,31 @@ function refreshDailyState(config) {
 
   ensureDirectory(LOG_DIR);
 
+  const previousIdsWriter = runtimeState.forwardedIdsWriter;
+  const previousHashesWriter = runtimeState.hashesWriter;
+
   runtimeState.dayKey = todayKey;
   runtimeState.forwardedIdsFile = path.join(LOG_DIR, `forwarded_ids_${todayKey}.txt`);
   runtimeState.hashesFile = path.join(LOG_DIR, `message_hashes_${todayKey}.txt`);
   runtimeState.forwardedIds = loadSet(runtimeState.forwardedIdsFile);
   runtimeState.forwardedHashes = loadSet(runtimeState.hashesFile);
   runtimeState.inFlightIds = new Set();
+  runtimeState.forwardedIdsWriter = new BufferedLineWriter(runtimeState.forwardedIdsFile, {
+    flushIntervalMs: config.logFlushIntervalMs,
+    flushBatchSize: config.logFlushBatchSize,
+  });
+  runtimeState.hashesWriter = new BufferedLineWriter(runtimeState.hashesFile, {
+    flushIntervalMs: config.logFlushIntervalMs,
+    flushBatchSize: config.logFlushBatchSize,
+  });
+
+  if (previousIdsWriter) {
+    previousIdsWriter.close().catch(() => {});
+  }
+
+  if (previousHashesWriter) {
+    previousHashesWriter.close().catch(() => {});
+  }
 
   console.log(
     `[STATE] ${todayKey} uchun loglar yuklandi. IDs=${runtimeState.forwardedIds.size}, hashes=${runtimeState.forwardedHashes.size}`
@@ -178,6 +376,12 @@ function refreshDailyState(config) {
 
 function normalizeText(text) {
   return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function getMessageHash(text) {
@@ -259,12 +463,12 @@ async function resolveChat(client, chatSpec, cachedChats) {
 function recordProcessed(messageId, textHash) {
   if (!runtimeState.forwardedIds.has(messageId)) {
     runtimeState.forwardedIds.add(messageId);
-    appendLine(runtimeState.forwardedIdsFile, messageId);
+    runtimeState.forwardedIdsWriter?.append(messageId);
   }
 
   if (!runtimeState.forwardedHashes.has(textHash)) {
     runtimeState.forwardedHashes.add(textHash);
-    appendLine(runtimeState.hashesFile, textHash);
+    runtimeState.hashesWriter?.append(textHash);
   }
 }
 
@@ -365,10 +569,15 @@ async function processCandidate(client, sourceChat, targetChat, message, config,
 async function processHistoryForChat(client, sourceChat, targetChat, config, includeRegex, excludeRegex) {
   console.log(`\n[SCAN] ${chatLabel(sourceChat)} dan history tekshirilmoqda...`);
 
-  const messages = await sourceChat.fetchMessages({ limit: config.historyLimitPerChat });
+  const messages = await fetchMessagesWithRetry(client, sourceChat, config);
+  if (!messages) {
+    console.warn(`[SCAN] ${chatLabel(sourceChat)} history olinmadi, live kuzatish davom etadi.`);
+    return;
+  }
+
   let forwardedCount = 0;
 
-  for (const message of messages) {
+  for (const message of messages.slice().reverse()) {
     const result = await processCandidate(
       client,
       sourceChat,
@@ -385,6 +594,49 @@ async function processHistoryForChat(client, sourceChat, targetChat, config, inc
   }
 
   console.log(`[SCAN] ${chatLabel(sourceChat)} | ${forwardedCount} ta xabar uzatildi.`);
+}
+
+async function fetchMessagesWithRetry(client, sourceChat, config) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= config.historyFetchRetries; attempt += 1) {
+    try {
+      const freshChat = await client.getChatById(sourceChat.id._serialized);
+      return await freshChat.fetchMessages({ limit: config.historyLimitPerChat });
+    } catch (error) {
+      lastError = error;
+      const isLastAttempt = attempt === config.historyFetchRetries;
+
+      console.warn(
+        `[SCAN] ${chatLabel(sourceChat)} history xatosi (urinish ${attempt + 1}/${config.historyFetchRetries + 1}): ${error.message}`
+      );
+
+      if (isLastAttempt) {
+        break;
+      }
+
+      await sleep(config.historyFetchRetryDelayMs);
+    }
+  }
+
+  console.warn(`[SCAN] ${chatLabel(sourceChat)} history skip qilindi: ${lastError?.message || 'noma`lum xato'}`);
+  return null;
+}
+
+async function closeRuntimeWriters() {
+  const closers = [];
+
+  if (runtimeState.forwardedIdsWriter) {
+    closers.push(runtimeState.forwardedIdsWriter.close());
+    runtimeState.forwardedIdsWriter = null;
+  }
+
+  if (runtimeState.hashesWriter) {
+    closers.push(runtimeState.hashesWriter.close());
+    runtimeState.hashesWriter = null;
+  }
+
+  await Promise.allSettled(closers);
 }
 
 async function printChatList(client) {
@@ -409,6 +661,7 @@ async function main() {
 
   const includeRegex = compileRegex(config.includePattern, 'includePattern');
   const excludeRegex = compileRegex(config.excludePattern, 'excludePattern');
+  const processingQueue = new TaskQueue(config.processingConcurrency);
 
   const client = new Client({
     authStrategy: new LocalAuth({
@@ -472,16 +725,24 @@ async function main() {
           return;
         }
 
-        await processCandidate(
-          client,
-          sourceChat,
-          targetChat,
-          message,
-          config,
-          includeRegex,
-          excludeRegex
-        );
+        processingQueue
+          .add(() =>
+            processCandidate(
+              client,
+              sourceChat,
+              targetChat,
+              message,
+              config,
+              includeRegex,
+              excludeRegex
+            )
+          )
+          .catch((error) => {
+            console.error(`[QUEUE] ${chatLabel(sourceChat)} | ${error.message}`);
+          });
       });
+
+      console.log('\n[LISTENING] Yangi xabarlar kuzatilmoqda...');
 
       for (const sourceChat of sourceChats) {
         await processHistoryForChat(
@@ -493,10 +754,10 @@ async function main() {
           excludeRegex
         );
       }
-
-      console.log('\n[LISTENING] Yangi xabarlar kuzatilmoqda...');
     } catch (error) {
       console.error(`[FATAL] ${error.message}`);
+      await processingQueue.onIdle().catch(() => {});
+      await closeRuntimeWriters();
       await client.destroy().catch(() => {});
       process.exit(1);
     }
@@ -504,6 +765,8 @@ async function main() {
 
   process.on('SIGINT', async () => {
     console.log('\n[EXIT] To`xtatilmoqda...');
+    await processingQueue.onIdle().catch(() => {});
+    await closeRuntimeWriters();
     await client.destroy().catch(() => {});
     process.exit(0);
   });
@@ -522,5 +785,6 @@ async function main() {
 
 main().catch((error) => {
   console.error(`[FATAL] ${error.message}`);
+  closeRuntimeWriters().catch(() => {});
   process.exit(1);
 });
