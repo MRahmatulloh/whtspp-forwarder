@@ -7,7 +7,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node whatsapp-forwarder.js",
-    "list-chats": "node whatsapp-forwarder.js --list-chats"
+    "list-chats": "node whatsapp-forwarder.js --list-chats",
+    "start:multi": "node whatsapp-multi-forwarder.js",
+    "list-chats:multi": "node whatsapp-multi-forwarder.js --list-chats"
   },
   "engines": {
     "node": ">=18"

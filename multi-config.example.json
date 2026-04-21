@@ -1,0 +1,51 @@
+{
+  "sessionName": "whtspp-multi-forwarder",
+  "timezone": "Asia/Tashkent",
+  "authTimeoutMs": 120000,
+  "historyLimitPerChat": 100,
+  "historyFetchRetries": 2,
+  "historyFetchRetryDelayMs": 1500,
+  "processingConcurrency": 2,
+  "logFlushIntervalMs": 250,
+  "logFlushBatchSize": 50,
+  "includePattern": "yuk|zakaz|buyurtma",
+  "excludePattern": "reklama|ref",
+  "maxMessageLength": 500,
+  "sourceChats": [
+    "120363012345678901@g.us",
+    "Mening Source Guruhim"
+  ],
+  "routeDefaults": {
+    "maxMessageLength": 300
+  },
+  "targetRoutes": [
+    {
+      "name": "Bekobod route",
+      "targetChat": "120363098765432101@g.us",
+      "includePattern": "bekobod|bekob|bekab",
+      "excludePattern": "fura|ref"
+    },
+    {
+      "name": "Toshkent route",
+      "targetChat": "Yangi Target Group",
+      "includePattern": "toshkent|tsh|chilonzor",
+      "excludePattern": "reklama|ref",
+      "maxMessageLength": 500
+    },
+    {
+      "name": "Hammasi alohida target",
+      "targetChat": "120363000000000000@g.us",
+      "includePattern": "urgent|tez"
+    }
+  ],
+  "puppeteer": {
+    "headless": true,
+    "timeout": 120000,
+    "protocolTimeout": 300000,
+    "args": [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  }
+}

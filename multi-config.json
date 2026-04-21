@@ -1,0 +1,59 @@
+{
+  "sessionName": "whtspp-multi-forwarder",
+  "timezone": "Asia/Tashkent",
+  "authTimeoutMs": 120000,
+  "historyLimitPerChat": 50,
+  "historyFetchRetries": 2,
+  "historyFetchRetryDelayMs": 1500,
+  "processingConcurrency": 2,
+  "logFlushIntervalMs": 250,
+  "logFlushBatchSize": 50,
+  "includePattern": "MPV|mpv|Mpv|8 Seater|Seater|seater|Minibus|minibus|MPV8|MPV9|MPV7|8seater|Minivan|minivan|V Class|v class",
+  "excludePattern": "",
+  "maxMessageLength": 500,
+  "sourceChats": [
+    "120363418792006956@g.us",
+    "120363424637452397@g.us",
+    "120363403214151828@g.us",
+    "120363401783457849@g.us",
+    "120363405158540925@g.us"
+  ],
+  "routeDefaults": {
+    "maxMessageLength": 500
+  },
+  "targetRoutes": [
+    {
+      "name": "LGW",
+      "targetChat": "120363410157384139@g.us",
+      "includePattern": "LGW|lgw|Gatwick|gatwick"
+    },
+    {
+      "name": "LHR",
+      "targetChat": "120363424824481857@g.us",
+      "includePattern": "LHR|lhr|Heathrow|heathrow",
+      "maxMessageLength": 500
+    },
+    {
+      "name": "LTN",
+      "targetChat": "120363425485002683@g.us",
+      "includePattern": "LTN|ltn|Luton|luton"
+    },
+    {
+      "name": "STN",
+      "targetChat": "120363426835107614@g.us",
+      "includePattern": "STN|stn|Stansted|stansted"
+    }
+  ],
+  "puppeteer": {
+    "headless": true,
+    "dumpio": true,
+    "pipe": true,
+    "timeout": 120000,
+    "protocolTimeout": 300000,
+    "args": [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  }
+}

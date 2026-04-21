@@ -8,26 +8,33 @@ const qrcode = require('qrcode-terminal');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 
 const ROOT_DIR = __dirname;
-const CONFIG_PATH = path.join(ROOT_DIR, 'config.json');
-const LOG_DIR = path.join(ROOT_DIR, 'message_logs');
+const CONFIG_PATH = path.join(ROOT_DIR, 'multi-config.json');
+const LOG_DIR = path.join(ROOT_DIR, 'message_logs_multi');
 const LIST_CHATS_ONLY = process.argv.includes('--list-chats');
 
+const DEFAULT_ROUTE = {
+  name: '',
+  includePattern: '',
+  excludePattern: '',
+  maxMessageLength: 300,
+};
+
 const DEFAULT_CONFIG = {
-  sessionName: 'whtspp-forwarder',
-  mode: 'filtered',
+  sessionName: 'whtspp-multi-forwarder',
   timezone: 'Asia/Tashkent',
   authTimeoutMs: 120000,
   historyLimitPerChat: 100,
   historyFetchRetries: 2,
   historyFetchRetryDelayMs: 1500,
-  maxMessageLength: 300,
   processingConcurrency: 2,
   logFlushIntervalMs: 250,
   logFlushBatchSize: 50,
   sourceChats: [],
-  targetChat: '',
   includePattern: '',
   excludePattern: '',
+  maxMessageLength: 300,
+  routeDefaults: { ...DEFAULT_ROUTE },
+  targetRoutes: [],
   authPath: path.join(ROOT_DIR, '.wwebjs_auth'),
   puppeteer: {
     headless: true,
@@ -43,7 +50,7 @@ const runtimeState = {
   hashesFile: '',
   forwardedIds: new Set(),
   forwardedHashes: new Set(),
-  inFlightIds: new Set(),
+  inFlightRouteKeys: new Set(),
   forwardedIdsWriter: null,
   hashesWriter: null,
 };
@@ -189,62 +196,22 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
-function loadConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    if (LIST_CHATS_ONLY) {
-      return { ...DEFAULT_CONFIG };
-    }
-
-    throw new Error(
-      `config.json topilmadi. Avval ${CONFIG_PATH} faylini config.example.json asosida yarating.`
-    );
-  }
-
-  const userConfig = readJson(CONFIG_PATH);
-  const config = {
-    ...DEFAULT_CONFIG,
-    ...userConfig,
-    puppeteer: {
-      ...DEFAULT_CONFIG.puppeteer,
-      ...(userConfig.puppeteer || {}),
-    },
-  };
-
-  config.mode = String(config.mode || 'filtered').trim().toLowerCase();
-  config.sourceChats = normalizeChatSpecs(config.sourceChats);
-  config.historyFetchRetries = Math.max(0, Number(config.historyFetchRetries) || 0);
-  config.historyFetchRetryDelayMs = Math.max(250, Number(config.historyFetchRetryDelayMs) || 1500);
-  config.processingConcurrency = Math.max(1, Number(config.processingConcurrency) || 1);
-  config.logFlushIntervalMs = Math.max(50, Number(config.logFlushIntervalMs) || 250);
-  config.logFlushBatchSize = Math.max(1, Number(config.logFlushBatchSize) || 50);
-
-  if (!LIST_CHATS_ONLY) {
-    if (!Array.isArray(config.sourceChats) || config.sourceChats.length === 0) {
-      throw new Error('config.json ichida sourceChats bo`sh bo`lmasligi kerak.');
-    }
-
-    if (!config.targetChat || typeof config.targetChat !== 'string') {
-      throw new Error('config.json ichida targetChat to`ldirilishi kerak.');
-    }
-
-    if (config.mode === 'filtered' && (!config.includePattern || typeof config.includePattern !== 'string')) {
-      throw new Error('config.json ichida includePattern to`ldirilishi kerak.');
-    }
-  }
-
-  if (!['filtered', 'all'].includes(config.mode)) {
-    throw new Error("mode faqat 'filtered' yoki 'all' bo`lishi mumkin.");
-  }
-
-  if (!/^[A-Za-z0-9_-]+$/.test(config.sessionName)) {
-    throw new Error('sessionName faqat harf, raqam, "_" yoki "-" dan iborat bo`lishi kerak.');
-  }
-
-  return config;
-}
-
 function ensureDirectory(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function loadSet(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return new Set();
+  }
+
+  const lines = fs
+    .readFileSync(filePath, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return new Set(lines);
 }
 
 function normalizeChatSpecs(sourceChats) {
@@ -268,36 +235,6 @@ function normalizeChatSpecs(sourceChats) {
   return result;
 }
 
-function loadSet(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return new Set();
-  }
-
-  const lines = fs
-    .readFileSync(filePath, 'utf8')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  return new Set(lines);
-}
-
-function formatDateParts(date, timezone) {
-  const formatter = getFormatter(timezone);
-
-  const parts = Object.fromEntries(
-    formatter.formatToParts(date).map((part) => [part.type, part.value])
-  );
-
-  return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: parts.hour,
-    minute: parts.minute,
-  };
-}
-
 function getFormatter(timezone) {
   let formatter = formatterCache.get(timezone);
   if (formatter) {
@@ -318,6 +255,22 @@ function getFormatter(timezone) {
   return formatter;
 }
 
+function formatDateParts(date, timezone) {
+  const formatter = getFormatter(timezone);
+
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).map((part) => [part.type, part.value])
+  );
+
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+  };
+}
+
 function getTodayKey(timezone) {
   const parts = formatDateParts(new Date(), timezone);
   return `${parts.year}-${parts.month}-${parts.day}`;
@@ -331,47 +284,6 @@ function formatMessageDate(date, timezone) {
 function getDateKey(date, timezone) {
   const parts = formatDateParts(date, timezone);
   return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-function refreshDailyState(config) {
-  const todayKey = getTodayKey(config.timezone);
-  if (runtimeState.dayKey === todayKey) {
-    return runtimeState;
-  }
-
-  ensureDirectory(LOG_DIR);
-
-  const previousIdsWriter = runtimeState.forwardedIdsWriter;
-  const previousHashesWriter = runtimeState.hashesWriter;
-
-  runtimeState.dayKey = todayKey;
-  runtimeState.forwardedIdsFile = path.join(LOG_DIR, `forwarded_ids_${todayKey}.txt`);
-  runtimeState.hashesFile = path.join(LOG_DIR, `message_hashes_${todayKey}.txt`);
-  runtimeState.forwardedIds = loadSet(runtimeState.forwardedIdsFile);
-  runtimeState.forwardedHashes = loadSet(runtimeState.hashesFile);
-  runtimeState.inFlightIds = new Set();
-  runtimeState.forwardedIdsWriter = new BufferedLineWriter(runtimeState.forwardedIdsFile, {
-    flushIntervalMs: config.logFlushIntervalMs,
-    flushBatchSize: config.logFlushBatchSize,
-  });
-  runtimeState.hashesWriter = new BufferedLineWriter(runtimeState.hashesFile, {
-    flushIntervalMs: config.logFlushIntervalMs,
-    flushBatchSize: config.logFlushBatchSize,
-  });
-
-  if (previousIdsWriter) {
-    previousIdsWriter.close().catch(() => {});
-  }
-
-  if (previousHashesWriter) {
-    previousHashesWriter.close().catch(() => {});
-  }
-
-  console.log(
-    `[STATE] ${todayKey} uchun loglar yuklandi. IDs=${runtimeState.forwardedIds.size}, hashes=${runtimeState.forwardedHashes.size}`
-  );
-
-  return runtimeState;
 }
 
 function normalizeText(text) {
@@ -394,6 +306,10 @@ function compileRegex(pattern, label) {
   } catch (error) {
     throw new Error(`${label} regex noto'g'ri: ${error.message}`);
   }
+}
+
+function isChatId(value) {
+  return /@(?:g\.us|c\.us|lid|newsletter|broadcast)$/.test(value);
 }
 
 function chatLabel(chat) {
@@ -458,8 +374,177 @@ function resolveSenderContactLink(message) {
   return phone ? `https://wa.me/${phone}` : '';
 }
 
-function isChatId(value) {
-  return /@(?:g\.us|c\.us|lid|newsletter|broadcast)$/.test(value);
+function formatMessageHeader(sourceChat, message, timezone) {
+  const contactLink = resolveSenderContactLink(message);
+  const lines = [
+    `Guruh: ${chatLabel(sourceChat)}`,
+    `Yuboruvchi: ${resolveSenderName(message)}`,
+    `Sana: ${formatMessageDate(messageTimestamp(message), timezone)}`,
+  ];
+
+  if (contactLink) {
+    lines.push(`Aloqa: ${contactLink}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatFallbackText(sourceChat, message, timezone) {
+  return [
+    formatMessageHeader(sourceChat, message, timezone),
+    '',
+    messageText(message),
+  ].join('\n');
+}
+
+function routeLabel(route) {
+  return route.name || route.targetChatSpec;
+}
+
+function routeMessageId(messageId, targetChatId) {
+  return `${messageId}::${targetChatId}`;
+}
+
+function routeMessageHash(textHash, targetChatId) {
+  return `${textHash}::${targetChatId}`;
+}
+
+function refreshDailyState(config) {
+  const todayKey = getTodayKey(config.timezone);
+  if (runtimeState.dayKey === todayKey) {
+    return runtimeState;
+  }
+
+  ensureDirectory(LOG_DIR);
+
+  const previousIdsWriter = runtimeState.forwardedIdsWriter;
+  const previousHashesWriter = runtimeState.hashesWriter;
+
+  runtimeState.dayKey = todayKey;
+  runtimeState.forwardedIdsFile = path.join(LOG_DIR, `forwarded_ids_${todayKey}.txt`);
+  runtimeState.hashesFile = path.join(LOG_DIR, `message_hashes_${todayKey}.txt`);
+  runtimeState.forwardedIds = loadSet(runtimeState.forwardedIdsFile);
+  runtimeState.forwardedHashes = loadSet(runtimeState.hashesFile);
+  runtimeState.inFlightRouteKeys = new Set();
+  runtimeState.forwardedIdsWriter = new BufferedLineWriter(runtimeState.forwardedIdsFile, {
+    flushIntervalMs: config.logFlushIntervalMs,
+    flushBatchSize: config.logFlushBatchSize,
+  });
+  runtimeState.hashesWriter = new BufferedLineWriter(runtimeState.hashesFile, {
+    flushIntervalMs: config.logFlushIntervalMs,
+    flushBatchSize: config.logFlushBatchSize,
+  });
+
+  if (previousIdsWriter) {
+    previousIdsWriter.close().catch(() => {});
+  }
+
+  if (previousHashesWriter) {
+    previousHashesWriter.close().catch(() => {});
+  }
+
+  console.log(
+    `[STATE] ${todayKey} uchun route loglar yuklandi. IDs=${runtimeState.forwardedIds.size}, hashes=${runtimeState.forwardedHashes.size}`
+  );
+
+  return runtimeState;
+}
+
+function normalizeRoute(route, index, routeDefaults) {
+  const merged = {
+    ...routeDefaults,
+    ...(route || {}),
+  };
+
+  return {
+    index,
+    name: String(merged.name || '').trim(),
+    targetChatSpec: String(merged.targetChat || '').trim(),
+    includePattern: String(merged.includePattern || '').trim(),
+    excludePattern: String(merged.excludePattern || '').trim(),
+    maxMessageLength: Math.max(1, Number(merged.maxMessageLength) || routeDefaults.maxMessageLength || 300),
+  };
+}
+
+function normalizeRoutes(routes, routeDefaults) {
+  if (!Array.isArray(routes)) {
+    return [];
+  }
+
+  return routes.map((route, index) => normalizeRoute(route, index, routeDefaults));
+}
+
+function loadConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    if (LIST_CHATS_ONLY) {
+      return { ...DEFAULT_CONFIG };
+    }
+
+    throw new Error(
+      `multi-config.json topilmadi. Avval ${CONFIG_PATH} faylini multi-config.example.json asosida yarating.`
+    );
+  }
+
+  const userConfig = readJson(CONFIG_PATH);
+  const routeDefaults = {
+    ...DEFAULT_ROUTE,
+    ...(userConfig.routeDefaults || {}),
+  };
+
+  const config = {
+    ...DEFAULT_CONFIG,
+    ...userConfig,
+    routeDefaults,
+    puppeteer: {
+      ...DEFAULT_CONFIG.puppeteer,
+      ...(userConfig.puppeteer || {}),
+    },
+  };
+
+  config.sourceChats = normalizeChatSpecs(config.sourceChats);
+  config.includePattern = String(config.includePattern || '').trim();
+  config.excludePattern = String(config.excludePattern || '').trim();
+  config.maxMessageLength = Math.max(1, Number(config.maxMessageLength) || 300);
+  config.targetRoutes = normalizeRoutes(config.targetRoutes, routeDefaults);
+  config.historyFetchRetries = Math.max(0, Number(config.historyFetchRetries) || 0);
+  config.historyFetchRetryDelayMs = Math.max(250, Number(config.historyFetchRetryDelayMs) || 1500);
+  config.processingConcurrency = Math.max(1, Number(config.processingConcurrency) || 1);
+  config.logFlushIntervalMs = Math.max(50, Number(config.logFlushIntervalMs) || 250);
+  config.logFlushBatchSize = Math.max(1, Number(config.logFlushBatchSize) || 50);
+
+  if (!/^[A-Za-z0-9_-]+$/.test(config.sessionName)) {
+    throw new Error('sessionName faqat harf, raqam, "_" yoki "-" dan iborat bo`lishi kerak.');
+  }
+
+  if (!LIST_CHATS_ONLY) {
+    if (config.sourceChats.length === 0) {
+      throw new Error('multi-config.json ichida sourceChats bo`sh bo`lmasligi kerak.');
+    }
+
+    if (config.targetRoutes.length === 0) {
+      throw new Error('multi-config.json ichida targetRoutes bo`sh bo`lmasligi kerak.');
+    }
+  }
+
+  for (const route of config.targetRoutes) {
+    if (!route.targetChatSpec) {
+      throw new Error(`targetRoutes[${route.index}] ichida targetChat to'ldirilishi kerak.`);
+    }
+
+    if (!config.includePattern && !route.includePattern) {
+      throw new Error(
+        `targetRoutes[${route.index}] uchun includePattern topilmadi. Global includePattern yoki route includePattern kerak.`
+      );
+    }
+
+    route.includeRegex = compileRegex(route.includePattern, `targetRoutes[${route.index}].includePattern`);
+    route.excludeRegex = compileRegex(route.excludePattern, `targetRoutes[${route.index}].excludePattern`);
+  }
+
+  config.includeRegex = compileRegex(config.includePattern, 'includePattern');
+  config.excludeRegex = compileRegex(config.excludePattern, 'excludePattern');
+
+  return config;
 }
 
 async function resolveChat(client, chatSpec, cachedChats) {
@@ -502,42 +587,7 @@ async function resolveChat(client, chatSpec, cachedChats) {
   throw new Error(`"${value}" chat topilmadi.${hint}`);
 }
 
-function recordProcessed(messageId, textHash) {
-  if (!runtimeState.forwardedIds.has(messageId)) {
-    runtimeState.forwardedIds.add(messageId);
-    runtimeState.forwardedIdsWriter?.append(messageId);
-  }
-
-  if (!runtimeState.forwardedHashes.has(textHash)) {
-    runtimeState.forwardedHashes.add(textHash);
-    runtimeState.hashesWriter?.append(textHash);
-  }
-}
-
-function formatMessageHeader(sourceChat, message, timezone) {
-  const contactLink = resolveSenderContactLink(message);
-  const lines = [
-    `Guruh: ${chatLabel(sourceChat)}`,
-    `Yuboruvchi: ${resolveSenderName(message)}`,
-    `Sana: ${formatMessageDate(messageTimestamp(message), timezone)}`,
-  ];
-
-  if (contactLink) {
-    lines.push(`Aloqa: ${contactLink}`);
-  }
-
-  return lines.join('\n');
-}
-
-function formatFallbackText(sourceChat, message, timezone) {
-  return [
-    formatMessageHeader(sourceChat, message, timezone),
-    '',
-    messageText(message),
-  ].join('\n');
-}
-
-function shouldHandleMessage(message, config, includeRegex, excludeRegex) {
+function shouldRouteMessage(message, config, route) {
   refreshDailyState(config);
 
   const text = messageText(message);
@@ -549,7 +599,8 @@ function shouldHandleMessage(message, config, includeRegex, excludeRegex) {
     return { ok: false, reason: 'from_me' };
   }
 
-  if (config.mode !== 'all' && text.length > config.maxMessageLength) {
+  const routeMaxLength = Math.min(config.maxMessageLength, route.maxMessageLength);
+  if (text.length > routeMaxLength) {
     return { ok: false, reason: 'too_long' };
   }
 
@@ -558,26 +609,54 @@ function shouldHandleMessage(message, config, includeRegex, excludeRegex) {
     return { ok: false, reason: 'not_today' };
   }
 
-  const id = messageKey(message);
-  const hash = getMessageHash(text);
-
-  if (runtimeState.forwardedIds.has(id) || runtimeState.inFlightIds.has(id)) {
-    return { ok: false, reason: 'duplicate_id' };
+  if (config.excludeRegex && config.excludeRegex.test(text)) {
+    return { ok: false, reason: 'excluded_global' };
   }
 
-  if (runtimeState.forwardedHashes.has(hash)) {
-    return { ok: false, reason: 'duplicate_hash' };
-  }
-
-  if (config.mode !== 'all' && excludeRegex && excludeRegex.test(text)) {
+  if (route.excludeRegex && route.excludeRegex.test(text)) {
     return { ok: false, reason: 'excluded' };
   }
 
-  if (config.mode !== 'all' && includeRegex && !includeRegex.test(text)) {
+  if (config.includeRegex && !config.includeRegex.test(text)) {
+    return { ok: false, reason: 'no_global_match' };
+  }
+
+  if (route.includeRegex && !route.includeRegex.test(text)) {
     return { ok: false, reason: 'no_match' };
   }
 
-  return { ok: true, id, hash, text };
+  const baseMessageId = messageKey(message);
+  const baseHash = getMessageHash(text);
+  const targetChatId = route.targetChat.id._serialized;
+  const routeId = routeMessageId(baseMessageId, targetChatId);
+  const routeHash = routeMessageHash(baseHash, targetChatId);
+
+  if (runtimeState.forwardedIds.has(routeId) || runtimeState.inFlightRouteKeys.has(routeId)) {
+    return { ok: false, reason: 'duplicate_id' };
+  }
+
+  if (runtimeState.forwardedHashes.has(routeHash)) {
+    return { ok: false, reason: 'duplicate_hash' };
+  }
+
+  return {
+    ok: true,
+    routeId,
+    routeHash,
+    text,
+  };
+}
+
+function recordProcessed(routeId, routeHash) {
+  if (!runtimeState.forwardedIds.has(routeId)) {
+    runtimeState.forwardedIds.add(routeId);
+    runtimeState.forwardedIdsWriter?.append(routeId);
+  }
+
+  if (!runtimeState.forwardedHashes.has(routeHash)) {
+    runtimeState.forwardedHashes.add(routeHash);
+    runtimeState.hashesWriter?.append(routeHash);
+  }
 }
 
 async function forwardOrFallback(client, targetChat, sourceChat, message, config) {
@@ -594,59 +673,44 @@ async function forwardOrFallback(client, targetChat, sourceChat, message, config
   }
 }
 
-async function processCandidate(client, sourceChat, targetChat, message, config, includeRegex, excludeRegex) {
-  const decision = shouldHandleMessage(message, config, includeRegex, excludeRegex);
+async function processRoute(client, sourceChat, message, config, route) {
+  const decision = shouldRouteMessage(message, config, route);
   if (!decision.ok) {
     return { forwarded: false, reason: decision.reason };
   }
 
-  runtimeState.inFlightIds.add(decision.id);
+  runtimeState.inFlightRouteKeys.add(decision.routeId);
 
   try {
-    const mode = await forwardOrFallback(client, targetChat, sourceChat, message, config);
-    recordProcessed(decision.id, decision.hash);
+    const mode = await forwardOrFallback(client, route.targetChat, sourceChat, message, config);
+    recordProcessed(decision.routeId, decision.routeHash);
 
     console.log(
-      `[OK] ${chatLabel(sourceChat)} | ${mode} | ${decision.id} | ${decision.text.slice(0, 120)}`
+      `[OK] ${chatLabel(sourceChat)} -> ${routeLabel(route)} | ${mode} | ${decision.routeId} | ${decision.text.slice(0, 120)}`
     );
 
     return { forwarded: true, reason: mode };
   } catch (error) {
-    console.error(`[ERROR] ${chatLabel(sourceChat)} | ${decision.id} | ${error.message}`);
+    console.error(
+      `[ERROR] ${chatLabel(sourceChat)} -> ${routeLabel(route)} | ${decision.routeId} | ${error.message}`
+    );
     return { forwarded: false, reason: error.message };
   } finally {
-    runtimeState.inFlightIds.delete(decision.id);
+    runtimeState.inFlightRouteKeys.delete(decision.routeId);
   }
 }
 
-async function processHistoryForChat(client, sourceChat, targetChat, config, includeRegex, excludeRegex) {
-  console.log(`\n[SCAN] ${chatLabel(sourceChat)} dan history tekshirilmoqda...`);
-
-  const messages = await fetchMessagesWithRetry(client, sourceChat, config);
-  if (!messages) {
-    console.warn(`[SCAN] ${chatLabel(sourceChat)} history olinmadi, live kuzatish davom etadi.`);
-    return;
-  }
-
+async function processMessageAcrossRoutes(client, sourceChat, message, config, routes) {
   let forwardedCount = 0;
 
-  for (const message of messages.slice().reverse()) {
-    const result = await processCandidate(
-      client,
-      sourceChat,
-      targetChat,
-      message,
-      config,
-      includeRegex,
-      excludeRegex
-    );
-
+  for (const route of routes) {
+    const result = await processRoute(client, sourceChat, message, config, route);
     if (result.forwarded) {
       forwardedCount += 1;
     }
   }
 
-  console.log(`[SCAN] ${chatLabel(sourceChat)} | ${forwardedCount} ta xabar uzatildi.`);
+  return forwardedCount;
 }
 
 async function fetchMessagesWithRetry(client, sourceChat, config) {
@@ -672,8 +736,31 @@ async function fetchMessagesWithRetry(client, sourceChat, config) {
     }
   }
 
-  console.warn(`[SCAN] ${chatLabel(sourceChat)} history skip qilindi: ${lastError?.message || 'noma`lum xato'}`);
+  console.warn(`[SCAN] ${chatLabel(sourceChat)} history skip qilindi: ${lastError?.message || "noma'lum xato"}`);
   return null;
+}
+
+async function processHistoryForChat(client, sourceChat, config, routes) {
+  if (config.historyLimitPerChat <= 0) {
+    console.log(`[SCAN] ${chatLabel(sourceChat)} history scan skip qilindi (historyLimitPerChat=0).`);
+    return;
+  }
+
+  console.log(`\n[SCAN] ${chatLabel(sourceChat)} dan history tekshirilmoqda...`);
+
+  const messages = await fetchMessagesWithRetry(client, sourceChat, config);
+  if (!messages) {
+    console.warn(`[SCAN] ${chatLabel(sourceChat)} history olinmadi, live kuzatish davom etadi.`);
+    return;
+  }
+
+  let forwardedCount = 0;
+
+  for (const message of messages.slice().reverse()) {
+    forwardedCount += await processMessageAcrossRoutes(client, sourceChat, message, config, routes);
+  }
+
+  console.log(`[SCAN] ${chatLabel(sourceChat)} | ${forwardedCount} ta route yuborish bajarildi.`);
 }
 
 async function closeRuntimeWriters() {
@@ -711,9 +798,6 @@ async function printChatList(client) {
 async function main() {
   const config = loadConfig();
   refreshDailyState(config);
-
-  const includeRegex = compileRegex(config.includePattern, 'includePattern');
-  const excludeRegex = compileRegex(config.excludePattern, 'excludePattern');
   const processingQueue = new TaskQueue(config.processingConcurrency);
 
   const client = new Client({
@@ -747,7 +831,7 @@ async function main() {
   });
 
   client.on('ready', async () => {
-    console.log('[READY] WhatsApp client tayyor.');
+    console.log('[READY] WhatsApp multi client tayyor.');
 
     try {
       if (LIST_CHATS_ONLY) {
@@ -757,7 +841,6 @@ async function main() {
       }
 
       const allChats = await client.getChats();
-      const targetChat = await resolveChat(client, config.targetChat, allChats);
       const sourceChats = [];
       const sourceChatById = new Map();
 
@@ -767,9 +850,23 @@ async function main() {
         sourceChatById.set(sourceChat.id._serialized, sourceChat);
       }
 
-      console.log(`[READY] Target: ${chatLabel(targetChat)} -> ${targetChat.id._serialized}`);
+      const routes = [];
+      for (const route of config.targetRoutes) {
+        const targetChat = await resolveChat(client, route.targetChatSpec, allChats);
+        routes.push({
+          ...route,
+          targetChat,
+        });
+      }
+
       for (const sourceChat of sourceChats) {
         console.log(`[READY] Source: ${chatLabel(sourceChat)} -> ${sourceChat.id._serialized}`);
+      }
+
+      for (const route of routes) {
+        console.log(
+          `[READY] Route: ${routeLabel(route)} | target=${chatLabel(route.targetChat)} -> ${route.targetChat.id._serialized}`
+        );
       }
 
       client.on('message', async (message) => {
@@ -779,33 +876,16 @@ async function main() {
         }
 
         processingQueue
-          .add(() =>
-            processCandidate(
-              client,
-              sourceChat,
-              targetChat,
-              message,
-              config,
-              includeRegex,
-              excludeRegex
-            )
-          )
+          .add(() => processMessageAcrossRoutes(client, sourceChat, message, config, routes))
           .catch((error) => {
             console.error(`[QUEUE] ${chatLabel(sourceChat)} | ${error.message}`);
           });
       });
 
-      console.log('\n[LISTENING] Yangi xabarlar kuzatilmoqda...');
+      console.log('\n[LISTENING] Route bo‘yicha yangi xabarlar kuzatilmoqda...');
 
       for (const sourceChat of sourceChats) {
-        await processHistoryForChat(
-          client,
-          sourceChat,
-          targetChat,
-          config,
-          includeRegex,
-          excludeRegex
-        );
+        await processHistoryForChat(client, sourceChat, config, routes);
       }
     } catch (error) {
       console.error(`[FATAL] ${error.message}`);
@@ -832,7 +912,7 @@ async function main() {
     console.error('[UNCAUGHT_EXCEPTION]', error);
   });
 
-  console.log('[BOOT] Client ishga tushmoqda...');
+  console.log('[BOOT] Multi client ishga tushmoqda...');
   await client.initialize();
 }
 

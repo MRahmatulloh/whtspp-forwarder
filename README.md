@@ -38,6 +38,44 @@ npm run list-chats
 npm start
 ```
 
+## Multi Target Router
+
+Bu repo ichiga yana alohida skript qo'shildi: [whatsapp-multi-forwarder.js](/C:/projects/whtspp-forwarder/whatsapp-multi-forwarder.js)
+
+- bir nechta `sourceChats` dan xabar oladi
+- global `includePattern` va `excludePattern` ishlatadi
+- har bir `targetRoute` shu global filtrlarni o'zining `includePattern` va `excludePattern` lari bilan kengaytiradi
+- bitta xabar bir nechta route ga mos kelsa, tegishli targetlarning har biriga yuboradi
+- dedupe `message + target` kesimida ishlaydi, ya'ni bir targetga ikki marta ketmaydi, lekin boshqa targetga alohida ketishi mumkin
+
+Ishga tushirish:
+
+1. [multi-config.example.json](/C:/projects/whtspp-forwarder/multi-config.example.json) asosida `multi-config.json` yarating.
+2. Chat ID larni ko'rish kerak bo'lsa:
+
+```bash
+npm run list-chats:multi
+```
+
+3. Multi route skriptni ishga tushiring:
+
+```bash
+npm run start:multi
+```
+
+`multi-config.json` ichidagi asosiy maydonlar:
+
+- `sourceChats`: kuzatiladigan source group/chatlar
+- `includePattern`: barcha route lar uchun umumiy include regex
+- `excludePattern`: barcha route lar uchun umumiy exclude regex
+- `maxMessageLength`: global maksimal uzunlik
+- `routeDefaults`: har bir route uchun umumiy default qiymatlar
+- `targetRoutes`: route ro'yxati
+- `targetRoutes[].targetChat`: mos target group yoki chat
+- `targetRoutes[].includePattern`: global include'dan keyin shu target uchun qo'shimcha include regex
+- `targetRoutes[].excludePattern`: global exclude ustiga shu target uchun qo'shimcha exclude regex
+- `targetRoutes[].maxMessageLength`: shu route uchun maksimal uzunlik, amalda global va route limitdan kichigi ishlaydi
+
 ## PM2 bilan ishlatish
 
 Bir martalik start:
